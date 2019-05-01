@@ -3,10 +3,11 @@
  * getcontext routines. This work must be done on CSE or CSCE. 
  */
 
-/* Enter the names of all team members here:
- * Member 1:
- * Member 2:
- * Member 3:
+/*
+ * Enter the names of all team members here:
+ * Member 1: Huy Vuong
+ * Member 2: None
+ * Member 3: None
  */
 
 #include "myThread.h"
@@ -28,8 +29,8 @@
  * */
 
 //#define MUTEX POSIX 
-#define MUTEX MYSEM 
-//#define MUTEX NONE 
+//#define MUTEX MYSEM 
+#define MUTEX NONE 
 //
 #define DEBUG 1
 
@@ -57,7 +58,7 @@ int main( void )
 	clocktimer.it_interval.tv_usec = INTERVAL;
 	setitimer (ITIMER_REAL, &clocktimer, 0);
 	sigset (SIGALRM, signalHandler);
-
+	sigset (SIGINT, signalHandler);
 	/* You need to set up an execution context for the cleanup
 	 * function to use (I've already created myCleanup for you). 
 	 * You need to initialize it to include the runtime stack space
@@ -67,7 +68,14 @@ int main( void )
 	 */
 
 	// set up your cleanup context here.
+	//getcontext(&myMain);
+	getcontext(&myCleanup);
+	
+	myCleanup.uc_link = NULL;
+	myCleanup.uc_stack.ss_sp = myCleanupStack;
+	myCleanup.uc_stack.ss_size = STACKSIZE;
 
+	makecontext(&myCleanup, cleanup, 0);
 	/* Next, you need to set up contexts for the user threads that will run
 	 * task1 and task2. We will assign even number threads to task1 and
 	 * odd number threads to task2. 
@@ -77,12 +85,18 @@ int main( void )
 		// set up your context for each thread here (e.g., context[0])
 		// for thread 0. Make sure you pass the current value of j as
 		// the thread id for task1 and task2.
-		
-		if (j % 2 == 0){
+		getcontext(&(context[j]));
+		myStack[j] = (char *) malloc(STACKSIZE);
+		context[j].uc_link = &myCleanup;
+		context[j].uc_stack.ss_sp = myStack[j];
+		context[j].uc_stack.ss_size = STACKSIZE;
+
+		if (j % 2 == 0) {
 #if DEBUG == 1
 			printf("Creating task1 thread[%d].\n", j);
 #endif
 			// map the corresponding context to task1
+			makecontext(&(context[j]), task1, 1, j);
 		}
 		else
 		{
@@ -90,6 +104,7 @@ int main( void )
 			printf("Creating task2 thread[%d].\n", j);
 #endif
 			// map the corresponding context to task2
+			makecontext(&(context[j]), task2, 1, j);
 		}
 
 		// you may want to keep the status of each thread using the
@@ -97,12 +112,14 @@ int main( void )
 		// executing, 0 means it has finished execution. 
 		
 		status[j] = 1;
+		
 
 		// You can keep track of the number of task1 and task2 threads
 		// using totalThreads.  When totalThreads is equal to 0, all
 		// tasks have finished and you can return to the main thread.
 		
-		totalThreads++; }
+		totalThreads++; 
+	}
 
 #if DEBUG == 1
 	printf("Running threads.\n");
@@ -112,14 +129,30 @@ int main( void )
 	 * running thread.
 	 */
 
-		// start running your threads here.
-
+	// start running your threads here.
+	getcontext(&myMain);
+	for (j = 0; j < THREADS; j++) {
+		if (status[j] == 1) {
+#if MYDEBUG == True
+			printf("Stating the first runnable thread at [%d].\n", j);
+#endif
+			currentThread = j;
+			status[j] = 2;
+			swapcontext(&myMain, &(context[j]));
+			break;
+		}
+	}
 	/* If you reach this point, your threads have all finished. It is
 	 * time to free the stack space created for each thread.
 	 */
-	for(j = 0; j < THREADS; j++)
-	{	
-	//		free(myStack[j]);
+	if (totalThreads == 0) {
+		for(j = 0; j < THREADS; j++)
+		{
+#if MYDEBUG == True
+			printf("status[%d] : %d\n", j, status[j]);
+#endif	
+			free(myStack[j]);
+		}
 	}
 	printf("==========================\n");
 	printf("sharedCounter = %d\n", sharedCounter);
@@ -143,6 +176,34 @@ void signalHandler( int signal )
 	 * task so you may need to consult the status array. Otherwise, you
 	 * may get segmentation faults.
 	 */
+	switch(signal) {
+		case SIGALRM:
+			;
+			int temp; int nextThread;
+			for (int i = 0; i < THREADS; i++) {
+				if (status[i] == 1 && i != currentThread) {
+#if MYDEBUG == True
+					printf("swap from %d to %d\n", currentThread, i);
+#endif
+					nextThread = i;
+					status[currentThread] = 1;
+					status[nextThread] = 2;
+					temp = currentThread;
+					currentThread = nextThread;
+					swapcontext(&context[temp], &context[nextThread]);	
+				}	
+			}
+			
+			break;
+		case SIGINT:
+#if MYDEBUG == True
+			printf("get in interrupt [%d]\n", getpid());
+#endif
+			break;
+		default:
+			printf("Weird signal received\n");
+			break;
+	}
 	return;
 }
 
@@ -154,6 +215,24 @@ void cleanup() {
 	 * (totalThreads--) each time a thread finishes. When totalThreads
 	 * is equal to 0, this function can return to the main thread.  
 	 */
+	status[currentThread] = 0;
+	totalThreads--;
+#if MYDEBUG == True
+	printf("Thread[%d] finishes, %d threads remaining\n", currentThread, totalThreads);
+#endif
+	//while(True) {
+	for (int i = 0 ; i < THREADS; i++ ) {
+		if (status[i] != 0) {
+			currentThread = i;
+			break;
+		} 
+	}
+	if (totalThreads == 0) {
+		setcontext(&myMain);
+	} else {
+		setcontext(&context[currentThread]);
+	}
+
 	return; 
 }
 
